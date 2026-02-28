@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sistema de Relatórios Operacionais</title>
+
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+
+<script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf"></script>
+
+<style>
+:root{
+--bg:#0F172A;
+--panel:#111827;
+--card:#1F2937;
+--border:#1E3A8A;
+--primary:#2563EB;
+--green:#10B981;
+--yellow:#F59E0B;
+--red:#EF4444;
+--text:#F1F5F9;
+--muted:#94A3B8;
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+
+body{
+font-family:"Inter",sans-serif;
+background:var(--bg);
+color:var(--text);
+}
+
+header{
+display:flex;
+justify-content:space-between;
+padding:20px 40px;
+background:var(--panel);
+border-bottom:1px solid var(--border);
+}
+
+.container{
+padding:30px 40px;
+}
+
+.grid{
+display:grid;
+grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+gap:20px;
+margin-bottom:30px;
+}
+
+.card{
+background:var(--card);
+padding:20px;
+border-radius:10px;
+border:1px solid var(--border);
+}
+
+.card h2{
+font-size:28px;
+}
+
+button{
+padding:8px 15px;
+background:var(--primary);
+border:none;
+border-radius:6px;
+color:white;
+cursor:pointer;
+margin-right:10px;
+}
+
+.chart-container{
+background:var(--card);
+padding:20px;
+border-radius:10px;
+border:1px solid var(--border);
+margin-bottom:30px;
+}
+
+table{
+width:100%;
+border-collapse:collapse;
+margin-top:15px;
+}
+
+th,td{
+padding:10px;
+border-top:1px solid #2A3448;
+}
+
+footer{
+text-align:center;
+padding:20px;
+background:var(--panel);
+border-top:1px solid var(--border);
+margin-top:40px;
+}
+
+footer img{
+height:40px;
+cursor:pointer;
+}
+</style>
+</head>
+
+<body>
+
+<header>
+<h1>Sistema de Relatórios Operacionais</h1>
+<div id="clock"></div>
+</header>
+
+<div class="container">
+
+<input type="file" id="fileInput" accept=".xlsx">
+<input type="date" id="startDate">
+<input type="date" id="endDate">
+<button onclick="applyFilter()">Filtrar</button>
+<button onclick="exportPDF()">Exportar PDF</button>
+<button onclick="exportExcel()">Exportar Excel</button>
+
+<div class="grid">
+<div class="card"><h2 id="totalOS">0</h2>Total OS</div>
+<div class="card"><h2 id="concluidasOS">0</h2>Concluídas</div>
+<div class="card"><h2 id="slaOS">0%</h2>SLA</div>
+</div>
+
+<div class="chart-container">
+<canvas id="statusChart"></canvas>
+</div>
+
+<div class="chart-container">
+<canvas id="tecnicoChart"></canvas>
+</div>
+
+<h3>Ranking Top 3 Técnicos</h3>
+<table id="rankingTable">
+<tr><th>Posição</th><th>Técnico</th><th>OS Concluídas</th></tr>
+</table>
+
+</div>
+
+<footer>
+<p onclick="redirectEmpresa()" style="cursor:pointer;">
+Sistema desenvolvido para Integrato Fibra
+</p>
+<img src="https://integratofibra.com.br/wp-content/uploads/2023/05/logo-integrato.png" onclick="redirectEmpresa()">
+</footer>
+
+<script>
+
+let rawData=[];
+let filteredData=[];
+let statusChart, tecnicoChart;
+
+setInterval(()=>{
+document.getElementById("clock").innerText=
+new Date().toLocaleString("pt-BR");
+},1000);
+
+document.getElementById("fileInput").addEventListener("change",function(e){
+const file=e.target.files[0];
+const reader=new FileReader();
+reader.onload=function(evt){
+const data=new Uint8Array(evt.target.result);
+const workbook=XLSX.read(data,{type:"array"});
+const sheet=workbook.Sheets[workbook.SheetNames[0]];
+rawData=XLSX.utils.sheet_to_json(sheet);
+filteredData=rawData;
+processData(filteredData);
+};
+reader.readAsArrayBuffer(file);
+});
+
+function applyFilter(){
+const start=document.getElementById("startDate").value;
+const end=document.getElementById("endDate").value;
+
+filteredData=rawData.filter(r=>{
+let d=new Date(r.data.split("/").reverse().join("-"));
+return (!start||d>=new Date(start))&&(!end||d<=new Date(end));
+});
+
+processData(filteredData);
+}
+
+function processData(data){
+const total=data.length;
+const concluidas=data.filter(r=>r.status==="Concluída").length;
+const sla=total?Math.round((concluidas/total)*100):0;
+
+document.getElementById("totalOS").innerText=total;
+document.getElementById("concluidasOS").innerText=concluidas;
+document.getElementById("slaOS").innerText=sla+"%";
+
+let statusCount={}, tecnicoCount={};
+
+data.forEach(r=>{
+statusCount[r.status]=(statusCount[r.status]||0)+1;
+if(r.status==="Concluída"){
+tecnicoCount[r.tecnico]=(tecnicoCount[r.tecnico]||0)+1;
+}
+});
+
+renderCharts(statusCount,tecnicoCount);
+renderRanking(tecnicoCount);
+}
+
+function renderCharts(statusData,tecnicoData){
+if(statusChart)statusChart.destroy();
+if(tecnicoChart)tecnicoChart.destroy();
+
+statusChart=new Chart(document.getElementById("statusChart"),{
+type:"pie",
+data:{labels:Object.keys(statusData),
+datasets:[{data:Object.values(statusData)}]}
+});
+
+tecnicoChart=new Chart(document.getElementById("tecnicoChart"),{
+type:"bar",
+data:{labels:Object.keys(tecnicoData),
+datasets:[{data:Object.values(tecnicoData)}]}
+});
+}
+
+function renderRanking(data){
+const sorted=Object.entries(data).sort((a,b)=>b[1]-a[1]).slice(0,3);
+const table=document.getElementById("rankingTable");
+table.innerHTML="<tr><th>Posição</th><th>Técnico</th><th>OS Concluídas</th></tr>";
+sorted.forEach((item,i)=>{
+table.innerHTML+=`<tr><td>${i+1}</td><td>${item[0]}</td><td>${item[1]}</td></tr>`;
+});
+}
+
+function exportPDF(){
+const { jsPDF } = window.jspdf;
+const doc=new jsPDF();
+
+doc.text("Relatório Operacional",20,20);
+doc.text("Data: "+new Date().toLocaleString("pt-BR"),20,30);
+doc.text("Total OS: "+document.getElementById("totalOS").innerText,20,50);
+doc.text("Concluídas: "+document.getElementById("concluidasOS").innerText,20,60);
+doc.text("SLA: "+document.getElementById("slaOS").innerText,20,70);
+
+doc.save("relatorio_operacional.pdf");
+}
+
+function exportExcel(){
+const ws=XLSX.utils.json_to_sheet(filteredData);
+const wb=XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(wb,ws,"Relatorio");
+XLSX.writeFile(wb,"relatorio_filtrado.xlsx");
+}
+
+function redirectEmpresa(){
+if(confirm("Você será redirecionado para o site oficial da Integrato Fibra.")){
+window.open("https://integratofibra.com.br/","_blank");
+}
+}
+
+</script>
+
+</body>
+</html>
